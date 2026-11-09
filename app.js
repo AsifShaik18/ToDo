@@ -217,6 +217,18 @@ function tasksDoneIn(keys) {
   const set = new Set(keys);
   return S.tasks.filter(t => t.done && t.doneAt && set.has(dateKey(new Date(t.doneAt)))).length;
 }
+const taskOrder = t => t.order ?? t.createdAt;
+function quadList(q, includeDone = true) {
+  return S.tasks.filter(t => t.q === q && (includeDone || !t.done)).sort((a, b) => (a.done - b.done) || (taskOrder(a) - taskOrder(b)));
+}
+// Place task t at visible position `index` inside quadrant q and renumber that quadrant.
+function moveTask(t, q, index) {
+  const visible = quadList(q, UI.showDone).filter(x => x !== t);
+  index = clamp(index, 0, visible.length); visible.splice(index, 0, t); t.q = q;
+  const hidden = quadList(q).filter(x => x !== t && !visible.includes(x));
+  [...visible, ...hidden].forEach((x, i) => x.order = i);
+  save(); render();
+}
 function streak() {
   let n = 0, d = new Date();
   const t = dayStats(todayKey());
@@ -401,7 +413,7 @@ function renderToday(v) {
   const day = getDay(key);
   const s = dayStats(key);
   const dayStart = S.settings.dayStart * 60, dayEnd = S.settings.dayEnd * 60;
-  const vital = S.tasks.filter(t => !t.done && (t.q === 'vital' || t.due === key)).slice(0, 8);
+  const vital = S.tasks.filter(t => !t.done && (t.q === 'vital' || t.due === key)).sort((a, b) => (a.q === 'vital' ? 0 : 1) - (b.q === 'vital' ? 0 : 1) || taskOrder(a) - taskOrder(b)).slice(0, 8);
   v.innerHTML = `
     <div class="view-head">
       <div><h1>${isToday ? 'Today' : key < todayKey() ? 'Looking back' : 'Planning ahead'}</h1><p class="sub">${fmtLong(date)}${S.settings.name ? ` · ${esc(S.settings.name)}` : ''}</p></div>
@@ -650,7 +662,7 @@ function renderBoard(v) {
   const due = t => { if (!t.due) return ''; const cls = t.due < todayKey() ? 'over' : t.due === todayKey() ? 'today' : ''; return `<span class="due ${cls}">${t.due === todayKey() ? 'Due today' : t.due < todayKey() ? 'Overdue · ' + fmtShort(parseKey(t.due)) : 'Due ' + fmtShort(parseKey(t.due))}</span>`; };
   v.innerHTML = `
     <div class="view-head">
-      <div><h1>Focus Board</h1><p class="sub">Four blocks. Drag tasks between them as priorities shift.</p></div>
+      <div><h1>Focus Board</h1><p class="sub">Four blocks. Drag tasks up, down or across blocks as priorities shift.</p></div>
       <div class="actions"><label class="check"><input type="checkbox" id="showDone" ${UI.showDone ? 'checked' : ''}> Show completed</label><button class="btn primary" id="addTask">${ICONS.plus} Task</button></div>
     </div>
     <div class="tiles">
@@ -661,7 +673,7 @@ function renderBoard(v) {
     </div>
     <div class="board">${QUADS.map(q => {
       const all = S.tasks.filter(t => t.q === q.id); const dn = all.filter(t => t.done).length;
-      const list = (UI.showDone ? all : all.filter(t => !t.done)).sort((a, b) => (a.done - b.done) || (a.due || '9').localeCompare(b.due || '9') || b.createdAt - a.createdAt);
+      const list = quadList(q.id, UI.showDone);
       return `<div class="quad" data-q="${q.id}" style="--qc:${q.color}">
         <div class="quad-head"><h3>${q.name}</h3><span class="cnt">${dn}/${all.length}</span></div>
         <div class="desc">${q.desc}</div>
@@ -669,7 +681,8 @@ function renderBoard(v) {
         <form class="quad-add"><input class="input" placeholder="Add a task and press Enter" data-add="${q.id}"></form>
         <div class="tasks">${list.map(t => `<div class="task ${t.done ? 'done' : ''}" draggable="true" data-id="${t.id}">
           <input type="checkbox" ${t.done ? 'checked' : ''}><div><div class="t">${esc(t.title)}</div>
-          <div class="meta"><span class="chip"><span class="dot" style="--c:${areaColor(t.area)}"></span>${esc(areaName(t.area))}</span>${due(t)}</div>${t.note ? `<div class="nt">${esc(t.note)}</div>` : ''}</div><span class="muted small">${t.done && t.doneAt ? '✓ ' + fmtShort(new Date(t.doneAt)) : ''}</span></div>`).join('') || '<div class="empty small">Nothing here</div>'}</div>
+          <div class="meta"><span class="chip"><span class="dot" style="--c:${areaColor(t.area)}"></span>${esc(areaName(t.area))}</span>${due(t)}</div>${t.note ? `<div class="nt">${esc(t.note)}</div>` : ''}</div>
+          <span class="mv"><button class="btn ghost icon sm" data-mv="top" title="Move to top">&#8648;</button><button class="btn ghost icon sm" data-mv="up" title="Move up">&#8593;</button><button class="btn ghost icon sm" data-mv="down" title="Move down">&#8595;</button><button class="btn ghost icon sm" data-mv="bottom" title="Move to bottom">&#8650;</button></span></div>`).join('') || '<div class="empty small">Nothing here</div>'}</div>
       </div>`; }).join('')}</div>`;
   const edit = (t, q) => openModal({
     title: t ? 'Edit task' : 'New task',
@@ -684,25 +697,44 @@ function renderBoard(v) {
     values: t || { q: q || 'vital', area: S.areas[0].id, due: '', note: '', done: false },
     onSave: x => {
       if (t) { if (x.done && !t.done) t.doneAt = Date.now(); if (!x.done) t.doneAt = null; Object.assign(t, x); }
-      else S.tasks.push({ id: uid(), createdAt: Date.now(), doneAt: x.done ? Date.now() : null, ...x });
+      else S.tasks.push({ id: uid(), createdAt: Date.now(), doneAt: x.done ? Date.now() : null, order: Date.now(), ...x });
       save(); render();
     },
     onDelete: t ? () => { S.tasks = S.tasks.filter(x => x !== t); save(); render(); } : null,
   });
   $('#addTask').onclick = () => edit(null);
   $('#showDone').onchange = e => { UI.showDone = e.target.checked; render(); };
-  $$('.quad-add', v).forEach(f => f.onsubmit = e => { e.preventDefault(); const inp = $('input', f); const title = inp.value.trim(); if (!title) return; S.tasks.push({ id: uid(), title, q: inp.dataset.add, area: S.areas[0].id, done: false, createdAt: Date.now(), due: '', note: '' }); save(); render(); setTimeout(() => $(`[data-add="${inp.dataset.add}"]`)?.focus(), 0); });
+  $$('.quad-add', v).forEach(f => f.onsubmit = e => { e.preventDefault(); const inp = $('input', f); const title = inp.value.trim(); if (!title) return; S.tasks.push({ id: uid(), title, q: inp.dataset.add, area: S.areas[0].id, done: false, createdAt: Date.now(), order: Date.now(), due: '', note: '' }); save(); render(); setTimeout(() => $(`[data-add="${inp.dataset.add}"]`)?.focus(), 0); });
   $$('.task', v).forEach(el => {
     const t = S.tasks.find(x => x.id === el.dataset.id);
     $('input', el).onclick = e => { e.stopPropagation(); t.done = e.target.checked; t.doneAt = t.done ? Date.now() : null; save(); render(); };
-    el.onclick = () => edit(t);
-    el.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', 'task:' + t.id); el.classList.add('dragging'); });
-    el.addEventListener('dragend', () => el.classList.remove('dragging'));
+    el.onclick = e => { if (e.target.closest('[data-mv]')) return; edit(t); };
+    $$('[data-mv]', el).forEach(b => b.onclick = e => {
+      e.stopPropagation();
+      const list = quadList(t.q, UI.showDone); const i = list.indexOf(t);
+      const to = { top: 0, up: i - 1, down: i + 1, bottom: list.length - 1 }[b.dataset.mv];
+      if (to !== i) moveTask(t, t.q, to);
+    });
+    el.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', 'task:' + t.id); e.dataTransfer.effectAllowed = 'move'; el.classList.add('dragging'); });
+    el.addEventListener('dragend', () => { el.classList.remove('dragging'); clearDrop(); });
+    el.addEventListener('dragover', e => {
+      e.preventDefault(); const r = el.getBoundingClientRect(); const before = e.clientY < r.top + r.height / 2;
+      if (UI.drop?.id !== t.id || UI.drop.before !== before) { clearDrop(); UI.drop = { id: t.id, before }; el.classList.add(before ? 'drop-before' : 'drop-after'); }
+    });
   });
+  const clearDrop = () => { UI.drop = null; $$('.task.drop-before, .task.drop-after', v).forEach(x => x.classList.remove('drop-before', 'drop-after')); };
   $$('.quad', v).forEach(q => {
-    q.addEventListener('dragover', e => { e.preventDefault(); q.classList.add('drag-over'); });
-    q.addEventListener('dragleave', e => { if (!q.contains(e.relatedTarget)) q.classList.remove('drag-over'); });
-    q.addEventListener('drop', e => { e.preventDefault(); q.classList.remove('drag-over'); const d = e.dataTransfer.getData('text/plain'); if (!d.startsWith('task:')) return; const t = S.tasks.find(x => x.id === d.slice(5)); if (t && t.q !== q.dataset.q) { t.q = q.dataset.q; save(); render(); } });
+    q.addEventListener('dragover', e => { e.preventDefault(); q.classList.add('drag-over'); if (!e.target.closest('.task')) clearDrop(); });
+    q.addEventListener('dragleave', e => { if (!q.contains(e.relatedTarget)) { q.classList.remove('drag-over'); clearDrop(); } });
+    q.addEventListener('drop', e => {
+      e.preventDefault(); q.classList.remove('drag-over');
+      const d = e.dataTransfer.getData('text/plain'); if (!d.startsWith('task:')) return clearDrop();
+      const t = S.tasks.find(x => x.id === d.slice(5)); if (!t) return clearDrop();
+      const target = q.dataset.q; const list = quadList(target, UI.showDone).filter(x => x !== t);
+      let index = list.length;
+      if (UI.drop) { const i = list.findIndex(x => x.id === UI.drop.id); if (i >= 0) index = i + (UI.drop.before ? 0 : 1); }
+      clearDrop(); moveTask(t, target, index);
+    });
   });
 }
 

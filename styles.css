@@ -313,6 +313,12 @@ textarea.input { min-height: 90px; resize: vertical; line-height: 1.5; }
 .task.done .t { text-decoration: line-through; color: var(--text-3); }
 .task .meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .task .nt { font-size: 12px; color: var(--text-3); margin-top: 3px; white-space: pre-wrap; }
+.task .mv { display: flex; gap: 0; opacity: 0; transition: opacity .15s; margin: -4px -6px -4px 0; }
+.task:hover .mv, .task:focus-within .mv { opacity: 1; }
+.task .mv .btn { width: 24px; height: 24px; padding: 0; font-size: 13px; color: var(--text-3); }
+.task .mv .btn:hover { color: var(--text); }
+.task.drop-before { box-shadow: 0 -3px 0 0 var(--accent); }
+.task.drop-after { box-shadow: 0 3px 0 0 var(--accent); }
 .task .due { font-size: 11px; color: var(--text-3); }
 .task .due.over { color: var(--critical); font-weight: 600; }
 .task .due.today { color: var(--warning); font-weight: 600; }
