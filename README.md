@@ -5,6 +5,7 @@ A private, password-locked day planner. One page, no backend, no build step.
 - **Today** – a drag-and-drop timeline of your day. Move blocks, resize them, tick them off, add notes.
 - **My Routine** – your default schedule (park, paper, badminton, office, syncs, content). New days are created from it.
 - **Focus Board** – four blocks: Very Important, Important Later, Quick Wins, Someday. Checkboxes, progress, notes, due dates. Drag tasks between blocks or onto the timeline.
+- **Timer** – 45-minute focus blocks with a 5-minute break after each (both adjustable). Start a timer from any task or learning item; every session is logged against it, so you can see time spent per task, per area, per day and per week.
 - **Learning** – courses, papers, articles, books with checklists and progress.
 - **Analytics** – completion trend, hours and completion by area, a consistency heatmap and tasks completed, switchable by day / week / month.
 - **Settings** – change password, areas, day range, auto-lock, export/import backup.
@@ -24,7 +25,7 @@ The Web Crypto API needs a secure context (https, localhost or a local file), wh
 
 ## Shortcuts
 
-`1`–`6` switch sections · `N` new block / task · `T` theme · `L` lock · `←` `→` change day
+`1`–`7` switch sections · `Space` start / pause timer · `N` new block / task · `T` theme · `L` lock · `←` `→` change day
 
 ## Files
 

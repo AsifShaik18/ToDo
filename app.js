@@ -39,6 +39,9 @@ const ICONS = {
   today: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="3"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="m9 16 2 2 4-4"/></svg>',
   routine: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   board: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg>',
+  timer: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6M12 2v3"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l12-7.5z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>',
   learn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
   stats: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-6"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
@@ -110,7 +113,8 @@ function defaultState() {
   const now = Date.now();
   return {
     v: 1,
-    settings: { name: '', theme: 'dark', dayStart: 6, dayEnd: 24, autoLock: 15 },
+    settings: { name: '', theme: 'dark', dayStart: 6, dayEnd: 24, autoLock: 15, focusMin: 45, breakMin: 5, autoBreak: true, notify: true },
+    sessions: [], timer: null,
     areas: [
       { id: 'health', name: 'Health', color: 'aqua' },
       { id: 'learn', name: 'Learning', color: 'blue' },
@@ -250,6 +254,91 @@ function periods() {
   return Array.from({ length: 12 }, (_, i) => { const ks = monthKeys(i - 11); const d = parseKey(ks[0]); return { label: MONTHS[d.getMonth()], keys: ks, full: `${MONTHS[d.getMonth()]} ${d.getFullYear()}` }; });
 }
 
+/* ---------------- Timer engine ---------------- */
+const fmtClock = ms => { const t = Math.max(0, Math.ceil(ms / 1000)); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60; return h ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`; };
+const sessionDay = x => dateKey(new Date(x.end));
+function sessionsIn(keys) { const set = new Set(keys); return (S.sessions || []).filter(x => set.has(sessionDay(x))); }
+const focusMins = list => list.filter(x => x.mode === 'focus').reduce((n, x) => n + x.mins, 0);
+const breakMins = list => list.filter(x => x.mode === 'break').reduce((n, x) => n + x.mins, 0);
+function spentOn(kind, id, keys = null) {
+  let list = (S.sessions || []).filter(x => x.kind === kind && x.refId === id && x.mode === 'focus');
+  if (keys) { const set = new Set(keys); list = list.filter(x => set.has(sessionDay(x))); }
+  let m = list.reduce((n, x) => n + x.mins, 0);
+  const t = S.timer; if (t && t.kind === kind && t.id === id && t.mode === 'focus') m += Timer.elapsedMs(t) / 60000;
+  return Math.round(m);
+}
+function refOf(kind, id) { return kind === 'task' ? S.tasks.find(x => x.id === id) : kind === 'learn' ? S.learning.find(x => x.id === id) : null; }
+let tickTimer = null;
+const Timer = {
+  elapsedMs(t = S.timer) { return t ? t.elapsedBefore + (t.pausedAt ? 0 : Date.now() - t.startedAt) : 0; },
+  remainingMs(t = S.timer) { return t ? t.minutes * 60000 - this.elapsedMs(t) : 0; },
+  running() { return !!(S.timer && !S.timer.pausedAt); },
+  start({ kind = 'free', id = null, title = 'Free focus', area = null, mode = 'focus', minutes } = {}) {
+    if (S.timer) this.stop({ silent: true });
+    minutes = minutes || (mode === 'focus' ? S.settings.focusMin : S.settings.breakMin);
+    S.timer = { kind, id, title, area, mode, minutes, startedAt: Date.now(), beganAt: Date.now(), pausedAt: null, elapsedBefore: 0 };
+    if (S.settings.notify && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+    save(); render(); startTick();
+  },
+  pause() { const t = S.timer; if (!t || t.pausedAt) return; t.elapsedBefore += Date.now() - t.startedAt; t.pausedAt = Date.now(); save(); render(); },
+  resume() { const t = S.timer; if (!t || !t.pausedAt) return; t.startedAt = Date.now(); t.pausedAt = null; save(); render(); startTick(); },
+  extend(min) { const t = S.timer; if (!t) return; t.minutes += min; save(); render(); },
+  // Stop the current timer and log what was actually spent.
+  stop({ silent = false } = {}) {
+    const t = S.timer; if (!t) return;
+    const ms = Math.min(this.elapsedMs(t), t.minutes * 60000);
+    if (ms >= 30000) S.sessions.push({ id: uid(), kind: t.kind, refId: t.id, title: t.title, area: t.area, mode: t.mode, start: t.beganAt, end: Date.now(), mins: Math.round(ms / 6000) / 10 });
+    S.timer = null; document.title = 'DayOS';
+    save(); if (!silent) render();
+  },
+  // Natural end of a block: log it, then queue the next phase.
+  complete() {
+    const t = S.timer; if (!t) return;
+    const ref = { kind: t.kind, id: t.id, title: t.title, area: t.area };
+    this.stop({ silent: true });
+    beep();
+    if (t.mode === 'focus') {
+      notify(`Focus block done. Take a ${S.settings.breakMin}-minute break.`);
+      S.timer = { ...ref, mode: 'break', minutes: S.settings.breakMin, startedAt: Date.now(), beganAt: Date.now(), pausedAt: S.settings.autoBreak ? null : Date.now(), elapsedBefore: 0 };
+    } else {
+      notify('Break over. Ready for the next focus block.');
+      S.timer = { ...ref, mode: 'focus', minutes: S.settings.focusMin, startedAt: Date.now(), beganAt: Date.now(), pausedAt: Date.now(), elapsedBefore: 0 };
+    }
+    save(); render();
+  },
+  skip() { const t = S.timer; if (!t) return; t.minutes = Math.max(0.5, this.elapsedMs(t) / 60000); this.complete(); },
+  tick() { const t = S.timer; if (!t) { clearInterval(tickTimer); tickTimer = null; return; } if (!t.pausedAt && this.remainingMs(t) <= 0) { this.complete(); return; } updateTimerDisplays(); },
+};
+function startTick() { if (!tickTimer) tickTimer = setInterval(() => Timer.tick(), 1000); }
+function updateTimerDisplays() {
+  const t = S.timer; const txt = t ? fmtClock(Timer.remainingMs(t)) : '';
+  $$('[data-timer-display]').forEach(el => { el.textContent = txt || el.dataset.idle || ''; });
+  const ring = $('#ringFg'); if (ring && t) ring.style.strokeDashoffset = RING_C * (1 - clamp(Timer.elapsedMs(t) / (t.minutes * 60000), 0, 1));
+  $$('[data-timer-spent]').forEach(el => { const [k, id] = el.dataset.timerSpent.split(':'); el.textContent = fmtDur(spentOn(k, id)); });
+  document.title = t && !t.pausedAt ? `${txt} · ${t.mode === 'focus' ? 'Focus' : 'Break'} · DayOS` : 'DayOS';
+}
+const RING_C = 2 * Math.PI * 100;
+function beep() {
+  try { const ctx = new (window.AudioContext || window.webkitAudioContext)(); [0, 0.22].forEach(d => { const o = ctx.createOscillator(), g = ctx.createGain(); o.connect(g); g.connect(ctx.destination); o.frequency.value = 880; g.gain.setValueAtTime(0.0001, ctx.currentTime + d); g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + d + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + d + 0.18); o.start(ctx.currentTime + d); o.stop(ctx.currentTime + d + 0.2); }); } catch {}
+}
+function notify(msg) { toast(msg); try { if (S.settings.notify && 'Notification' in window && Notification.permission === 'granted') new Notification('DayOS', { body: msg }); } catch {} }
+function timerButton(kind, ref, extraClass = '') {
+  const t = S.timer; const mine = t && t.kind === kind && t.id === ref.id;
+  if (mine && !t.pausedAt) return `<button class="btn sm tbtn on ${extraClass}" data-timer="${kind}:${ref.id}" title="Pause timer">${ICONS.pause} <span data-timer-display>${fmtClock(Timer.remainingMs(t))}</span></button>`;
+  if (mine) return `<button class="btn sm tbtn paused ${extraClass}" data-timer="${kind}:${ref.id}" title="Resume timer">${ICONS.play} <span data-timer-display>${fmtClock(Timer.remainingMs(t))}</span></button>`;
+  return `<button class="btn sm tbtn ${extraClass}" data-timer="${kind}:${ref.id}" title="Start a ${ref.estimate || S.settings.focusMin}-minute focus timer">${ICONS.play} ${ref.estimate || S.settings.focusMin}m</button>`;
+}
+function bindTimerButtons(scope) {
+  $$('[data-timer]', scope).forEach(b => b.onclick = e => {
+    e.stopPropagation(); e.preventDefault();
+    const [kind, id] = b.dataset.timer.split(':'); const ref = refOf(kind, id); if (!ref) return;
+    const t = S.timer;
+    if (t && t.kind === kind && t.id === id) { t.pausedAt ? Timer.resume() : Timer.pause(); return; }
+    Timer.start({ kind, id, title: ref.title, area: ref.area, mode: 'focus', minutes: ref.estimate || S.settings.focusMin });
+    toast(`Focus timer started · ${ref.title}`);
+  });
+}
+
 /* ---------------- Toast / tooltip ---------------- */
 function toast(msg) {
   const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg;
@@ -379,6 +468,7 @@ const VIEWS = [
   { id: 'today', name: 'Today', sub: 'Plan & track the day', icon: 'today', badge: () => { const s = dayStats(todayKey()); return s ? `${s.doneCount}/${s.count}` : ''; } },
   { id: 'routine', name: 'My Routine', sub: 'Daily schedule template', icon: 'routine', badge: () => `${S.routine.length}` },
   { id: 'board', name: 'Focus Board', sub: 'Priorities in 4 blocks', icon: 'board', badge: () => { const n = S.tasks.filter(t => !t.done && t.q === 'vital').length; return n ? `${n} vital` : ''; } },
+  { id: 'timer', name: 'Timer', sub: 'Focus & break cycles', icon: 'timer', badge: () => S.timer ? `<span data-timer-display>${fmtClock(Timer.remainingMs())}</span>` : '' },
   { id: 'learn', name: 'Learning', sub: 'Courses, papers, articles', icon: 'learn', badge: () => { const n = S.learning.filter(l => l.status === 'active').length; return n ? `${n} active` : ''; } },
   { id: 'stats', name: 'Analytics', sub: 'Day · week · month', icon: 'stats', badge: () => '' },
   { id: 'settings', name: 'Settings', sub: 'Security, areas, data', icon: 'settings', badge: () => '' },
@@ -388,11 +478,20 @@ function renderNav() {
     <span class="ic">${ICONS[v.icon]}</span><span><span class="nm">${v.name}</span><span class="sub">${v.sub}</span></span><span class="badge" ${v.badge() ? '' : 'hidden'}>${v.badge()}</span></button>`).join('');
   $$('#nav .nav-item').forEach(b => b.onclick = () => { UI.view = b.dataset.view; render(); });
   $('#brandDate').textContent = fmtLong(new Date());
-  const s = dayStats(todayKey());
-  $('#sideStat').innerHTML = `<div class="lbl">Today</div><div class="val">${s ? s.rate + '%' : '—'}</div>
-    <div class="small muted">${s ? `${s.doneCount} of ${s.count} blocks · ${fmtHrs(s.done)} / ${fmtHrs(s.planned)}` : 'Nothing planned yet'}</div>
-    <div class="meter"><i style="width:${s ? s.rate : 0}%"></i></div>
-    <div class="small muted" style="margin-top:8px">🔥 ${streak()} day streak</div>`;
+  const s = dayStats(todayKey()); const t = S.timer;
+  if (t) {
+    $('#sideStat').innerHTML = `<div class="lbl">${t.mode === 'focus' ? '● Focus' : '○ Break'}${t.pausedAt ? ' · paused' : ''}</div><div class="val" data-timer-display>${fmtClock(Timer.remainingMs(t))}</div>
+      <div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.title)}</div>
+      <div class="side-foot" style="margin-top:10px"><button class="btn sm" id="sideToggle">${t.pausedAt ? 'Start' : 'Pause'}</button><button class="btn sm" id="sideStop">Stop</button></div>`;
+    $('#sideToggle').onclick = () => t.pausedAt ? Timer.resume() : Timer.pause();
+    $('#sideStop').onclick = () => { Timer.stop(); toast('Session logged'); };
+  } else {
+    const f = focusMins(sessionsIn([todayKey()]));
+    $('#sideStat').innerHTML = `<div class="lbl">Today</div><div class="val">${s ? s.rate + '%' : '—'}</div>
+      <div class="small muted">${s ? `${s.doneCount} of ${s.count} blocks · ${fmtHrs(s.done)} / ${fmtHrs(s.planned)}` : 'Nothing planned yet'}</div>
+      <div class="meter"><i style="width:${s ? s.rate : 0}%"></i></div>
+      <div class="small muted" style="margin-top:8px">🔥 ${streak()} day streak · ⏱ ${fmtDur(Math.round(f))} focus</div>`;
+  }
 }
 function render() {
   if (!S) return;
@@ -401,7 +500,8 @@ function render() {
   UI.prevView = UI.view; UI.prevDate = UI.date; UI.scrollToNow = changed;
   renderNav();
   const v = $('#view');
-  ({ today: renderToday, routine: renderRoutine, board: renderBoard, learn: renderLearn, stats: renderStats, settings: renderSettings })[UI.view](v);
+  ({ today: renderToday, routine: renderRoutine, board: renderBoard, timer: renderTimer, learn: renderLearn, stats: renderStats, settings: renderSettings })[UI.view](v);
+  bindTimerButtons(v);
   if (changed) $('.main').scrollTop = 0;
 }
 
@@ -681,8 +781,8 @@ function renderBoard(v) {
         <form class="quad-add"><input class="input" placeholder="Add a task and press Enter" data-add="${q.id}"></form>
         <div class="tasks">${list.map(t => `<div class="task ${t.done ? 'done' : ''}" draggable="true" data-id="${t.id}">
           <input type="checkbox" ${t.done ? 'checked' : ''}><div><div class="t">${esc(t.title)}</div>
-          <div class="meta"><span class="chip"><span class="dot" style="--c:${areaColor(t.area)}"></span>${esc(areaName(t.area))}</span>${due(t)}</div>${t.note ? `<div class="nt">${esc(t.note)}</div>` : ''}</div>
-          <span class="mv"><button class="btn ghost icon sm" data-mv="top" title="Move to top">&#8648;</button><button class="btn ghost icon sm" data-mv="up" title="Move up">&#8593;</button><button class="btn ghost icon sm" data-mv="down" title="Move down">&#8595;</button><button class="btn ghost icon sm" data-mv="bottom" title="Move to bottom">&#8650;</button></span></div>`).join('') || '<div class="empty small">Nothing here</div>'}</div>
+          <div class="meta"><span class="chip"><span class="dot" style="--c:${areaColor(t.area)}"></span>${esc(areaName(t.area))}</span>${due(t)}<span class="chip time" title="Focus time spent / estimate">⏱ <span data-timer-spent="task:${t.id}">${fmtDur(spentOn('task', t.id))}</span> / ${fmtDur(t.estimate || S.settings.focusMin)}</span></div>${t.note ? `<div class="nt">${esc(t.note)}</div>` : ''}</div>
+          <span class="side">${timerButton('task', t)}<span class="mv"><button class="btn ghost icon sm" data-mv="top" title="Move to top">&#8648;</button><button class="btn ghost icon sm" data-mv="up" title="Move up">&#8593;</button><button class="btn ghost icon sm" data-mv="down" title="Move down">&#8595;</button><button class="btn ghost icon sm" data-mv="bottom" title="Move to bottom">&#8650;</button></span></span></div>`).join('') || '<div class="empty small">Nothing here</div>'}</div>
       </div>`; }).join('')}</div>`;
   const edit = (t, q) => openModal({
     title: t ? 'Edit task' : 'New task',
@@ -690,11 +790,12 @@ function renderBoard(v) {
       { k: 'title', label: 'Task', required: true, autofocus: true },
       { k: 'q', label: 'Block', type: 'select', options: QUADS.map(q => ({ v: q.id, l: q.name })), half: true },
       { k: 'area', label: 'Area', type: 'area', half: true },
-      { k: 'due', label: 'Due date', type: 'date' },
+      { k: 'due', label: 'Due date', type: 'date', half: true },
+      { k: 'estimate', label: 'Focus timer length (minutes)', type: 'number', min: 5, step: 5, half: true },
       { k: 'note', label: 'Notes', type: 'textarea', placeholder: 'Context, links, sub-steps…' },
       { k: 'done', label: 'Done', type: 'checkbox' },
     ],
-    values: t || { q: q || 'vital', area: S.areas[0].id, due: '', note: '', done: false },
+    values: t ? { ...t, estimate: t.estimate || S.settings.focusMin } : { q: q || 'vital', area: S.areas[0].id, due: '', note: '', done: false, estimate: S.settings.focusMin },
     onSave: x => {
       if (t) { if (x.done && !t.done) t.doneAt = Date.now(); if (!x.done) t.doneAt = null; Object.assign(t, x); }
       else S.tasks.push({ id: uid(), createdAt: Date.now(), doneAt: x.done ? Date.now() : null, order: Date.now(), ...x });
@@ -708,7 +809,7 @@ function renderBoard(v) {
   $$('.task', v).forEach(el => {
     const t = S.tasks.find(x => x.id === el.dataset.id);
     $('input', el).onclick = e => { e.stopPropagation(); t.done = e.target.checked; t.doneAt = t.done ? Date.now() : null; save(); render(); };
-    el.onclick = e => { if (e.target.closest('[data-mv]')) return; edit(t); };
+    el.onclick = e => { if (e.target.closest('[data-mv], [data-timer]')) return; edit(t); };
     $$('[data-mv]', el).forEach(b => b.onclick = e => {
       e.stopPropagation();
       const list = quadList(t.q, UI.showDone); const i = list.indexOf(t);
@@ -738,6 +839,94 @@ function renderBoard(v) {
   });
 }
 
+/* ---------------- Timer view ---------------- */
+function renderTimer(v) {
+  const t = S.timer, st = S.settings;
+  const todayS = sessionsIn([todayKey()]), weekS = sessionsIn(weekKeys());
+  const fT = Math.round(focusMins(todayS)), bT = Math.round(breakMins(todayS));
+  const openTasks = quadList('vital', false).concat(quadList('later', false), quadList('quick', false), quadList('someday', false));
+  const activeLearn = S.learning.filter(l => l.status !== 'done');
+  const sel = t ? `${t.kind}:${t.id}` : (UI.timerRef || '');
+  const options = `<option value="">Free focus (no task)</option>
+    <optgroup label="Focus board">${openTasks.map(x => `<option value="task:${x.id}" ${sel === 'task:' + x.id ? 'selected' : ''}>${esc(x.title)}</option>`).join('')}</optgroup>
+    <optgroup label="Learning">${activeLearn.map(x => `<option value="learn:${x.id}" ${sel === 'learn:' + x.id ? 'selected' : ''}>${esc(x.title)}</option>`).join('')}</optgroup>`;
+  const prog = t ? clamp(Timer.elapsedMs(t) / (t.minutes * 60000), 0, 1) : 0;
+  const blocks = Math.floor(fT / st.focusMin);
+  v.innerHTML = `
+    <div class="view-head">
+      <div><h1>Timer</h1><p class="sub">Work in ${st.focusMin}-minute focus blocks with a ${st.breakMin}-minute break after each. Every session is logged against its task.</p></div>
+      <div class="actions">
+        <div class="seg" title="Focus length">${[25, 45, 50, 90].map(m => `<button class="${st.focusMin === m ? 'on' : ''}" data-f="${m}">${m}m focus</button>`).join('')}</div>
+        <div class="seg" title="Break length">${[5, 10, 15].map(m => `<button class="${st.breakMin === m ? 'on' : ''}" data-b="${m}">${m}m break</button>`).join('')}</div>
+      </div>
+    </div>
+    <div class="timer-grid">
+      <div class="card timer-card ${t ? t.mode : 'idle'} ${t && t.pausedAt ? 'paused' : ''}">
+        <div class="ring"><svg viewBox="0 0 220 220"><circle class="bg" cx="110" cy="110" r="100"/><circle class="fg" id="ringFg" cx="110" cy="110" r="100" stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C * (1 - prog)}"/></svg>
+          <div class="ring-inner"><div class="mode">${t ? (t.mode === 'focus' ? 'Focus' : 'Break') + (t.pausedAt ? ' · paused' : '') : 'Ready'}</div><div class="clock" data-timer-display data-idle="${fmtClock(st.focusMin * 60000)}">${t ? fmtClock(Timer.remainingMs(t)) : fmtClock(st.focusMin * 60000)}</div><div class="who">${t ? esc(t.title) : 'Pick something to work on'}</div></div></div>
+        <div class="timer-controls">
+          ${!t ? `<button class="btn primary" id="tStart">${ICONS.play} Start focus</button><button class="btn" id="tBreak">Start a break</button>`
+            : t.pausedAt ? `<button class="btn primary" id="tResume">${ICONS.play} ${t.elapsedBefore ? 'Resume' : 'Start ' + t.mode}</button>` : `<button class="btn" id="tPause">${ICONS.pause} Pause</button>`}
+          ${t ? `<button class="btn" id="tStop">■ Stop & log</button><button class="btn" id="tSkip">${t.mode === 'focus' ? 'Finish early → break' : 'Skip break'}</button><button class="btn ghost" id="tPlus">+5 min</button>` : ''}
+        </div>
+        <div class="field" style="margin-top:16px"><label>Working on</label><select class="input" id="tRef">${options}</select></div>
+        <label class="check" style="margin-top:12px"><input type="checkbox" id="tAuto" ${st.autoBreak ? 'checked' : ''}> Start the ${st.breakMin}-minute break automatically when a focus block ends</label>
+        <label class="check" style="margin-top:6px"><input type="checkbox" id="tNotify" ${st.notify ? 'checked' : ''}> Desktop notification and sound when a block ends</label>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div class="tiles" style="margin:0">
+          <div class="tile"><div class="lbl">Focus today</div><div class="val">${fmtDur(fT)}</div><div class="delta">${blocks} full block${blocks === 1 ? '' : 's'} of ${st.focusMin}m</div></div>
+          <div class="tile"><div class="lbl">Break today</div><div class="val">${fmtDur(bT)}</div><div class="delta ${fT >= st.focusMin && bT < Math.floor(fT / st.focusMin) * st.breakMin ? 'down' : ''}">${fT >= st.focusMin && bT < Math.floor(fT / st.focusMin) * st.breakMin ? 'Below the 1 break per block rule' : 'On track'}</div></div>
+          <div class="tile"><div class="lbl">Sessions today</div><div class="val">${todayS.filter(x => x.mode === 'focus').length}</div></div>
+          <div class="tile"><div class="lbl">Focus this week</div><div class="val">${fmtDur(Math.round(focusMins(weekS)))}</div><div class="delta">${fmtDur(Math.round(breakMins(weekS)))} of breaks</div></div>
+        </div>
+        <div class="card"><div class="card-head"><h3>Focus minutes per day · this week</h3></div><div id="chFocusWeek"></div></div>
+        <div class="card">
+          <div class="card-head"><h3>Today's sessions</h3><button class="btn ghost sm" id="logManual">${ICONS.plus} Log time</button></div>
+          <div class="sess-list">${todayS.length ? [...todayS].reverse().map(x => `<div class="sess ${x.mode}" data-sid="${x.id}">
+            <span class="chip"><span class="dot" style="--c:${x.mode === 'focus' ? (x.area ? areaColor(x.area) : 'var(--accent)') : 'var(--text-3)'}"></span>${x.mode}</span>
+            <span class="t">${esc(x.title)}</span><span class="muted small">${new Date(x.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} – ${new Date(x.end).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+            <b>${fmtDur(Math.round(x.mins))}</b><button class="btn ghost icon sm" data-del title="Remove">✕</button></div>`).join('') : '<div class="empty">No sessions yet today. Start a focus block.</div>'}</div>
+        </div>
+      </div>
+    </div>`;
+  const refFromSelect = () => { const val = $('#tRef').value; if (!val) return { kind: 'free', id: null, title: 'Free focus', area: null }; const [kind, id] = val.split(':'); const r = refOf(kind, id); return r ? { kind, id, title: r.title, area: r.area, minutes: r.estimate } : null; };
+  $('#tRef').onchange = () => { UI.timerRef = $('#tRef').value; if (S.timer) { const r = refFromSelect(); if (r) { Object.assign(S.timer, { kind: r.kind, id: r.id, title: r.title, area: r.area }); save(); render(); } } };
+  $('#tStart')?.addEventListener('click', () => { const r = refFromSelect(); Timer.start({ ...r, mode: 'focus', minutes: r.minutes || st.focusMin }); });
+  $('#tBreak')?.addEventListener('click', () => { const r = refFromSelect(); Timer.start({ ...r, mode: 'break', minutes: st.breakMin }); });
+  $('#tResume')?.addEventListener('click', () => Timer.resume());
+  $('#tPause')?.addEventListener('click', () => Timer.pause());
+  $('#tStop')?.addEventListener('click', () => { Timer.stop(); toast('Session logged'); });
+  $('#tSkip')?.addEventListener('click', () => Timer.skip());
+  $('#tPlus')?.addEventListener('click', () => Timer.extend(5));
+  $('#tAuto').onchange = e => { st.autoBreak = e.target.checked; save(); };
+  $('#tNotify').onchange = e => { st.notify = e.target.checked; save(); if (st.notify && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {}); };
+  $$('[data-f]', v).forEach(b => b.onclick = () => { st.focusMin = +b.dataset.f; save(); render(); });
+  $$('[data-b]', v).forEach(b => b.onclick = () => { st.breakMin = +b.dataset.b; save(); render(); });
+  $$('.sess [data-del]', v).forEach(b => b.onclick = () => { const id = b.closest('.sess').dataset.sid; S.sessions = S.sessions.filter(x => x.id !== id); save(); render(); });
+  $('#logManual').onclick = () => openModal({
+    title: 'Log time manually',
+    fields: [
+      { k: 'ref', label: 'Working on', type: 'select', options: [{ v: '', l: 'Free focus (no task)' }, ...openTasks.map(x => ({ v: 'task:' + x.id, l: x.title })), ...activeLearn.map(x => ({ v: 'learn:' + x.id, l: x.title }))] },
+      { k: 'mins', label: 'Minutes', type: 'number', min: 1, step: 5, half: true },
+      { k: 'mode', label: 'Type', type: 'select', options: [{ v: 'focus', l: 'Focus' }, { v: 'break', l: 'Break' }], half: true },
+      { k: 'date', label: 'Date', type: 'date' },
+    ],
+    values: { ref: UI.timerRef || '', mins: st.focusMin, mode: 'focus', date: todayKey() },
+    onSave: x => {
+      if (!x.mins) return;
+      let ref = { kind: 'free', id: null, title: 'Free focus', area: null };
+      if (x.ref) { const [kind, id] = x.ref.split(':'); const r = refOf(kind, id); if (r) ref = { kind, id, title: r.title, area: r.area }; }
+      const end = x.date ? parseKey(x.date).setHours(12, 0, 0, 0) : Date.now();
+      S.sessions.push({ id: uid(), ...ref, refId: ref.id, mode: x.mode, start: end - x.mins * 60000, end, mins: x.mins, manual: true });
+      save(); render(); toast('Time logged');
+    },
+  });
+  const wk = weekKeys().map(k => ({ label: DAYS[dow(parseKey(k))], full: fmtLong(parseKey(k)), value: Math.round(focusMins(sessionsIn([k]))) }));
+  vbarChart($('#chFocusWeek'), wk, { cols: ['Day', 'Focus min'], tip: p => `${fmtDur(p.value)} focus` });
+  if (t) startTick();
+}
+
 /* ---------------- Learning ---------------- */
 function learnProgress(l) { return l.items?.length ? pct(l.items.filter(i => i.done).length, l.items.length) : (l.progress || 0); }
 function renderLearn(v) {
@@ -760,9 +949,9 @@ function renderLearn(v) {
       <div class="seg">${['all', 'active', 'planned', 'done'].map(s => `<button class="${UI.learnStatus === s ? 'on' : ''}" data-ls="${s}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div>
     </div>
     <div class="learn-grid">${list.length ? list.map(l => `<div class="lcard" data-id="${l.id}" style="--c:${areaColor(l.area)}">
-      <div class="top"><span class="type">${esc(l.type)}</span><span class="status ${l.status}">${l.status}</span></div>
+      <div class="top"><span class="type">${esc(l.type)}</span><span style="display:flex;gap:6px;align-items:center">${l.status !== 'done' ? timerButton('learn', l) : ''}<span class="status ${l.status}">${l.status}</span></span></div>
       <h3>${esc(l.title)}</h3>
-      <div class="top"><span class="chip"><span class="dot"></span>${esc(areaName(l.area))}</span><span class="pct">${learnProgress(l)}%</span></div>
+      <div class="top"><span style="display:flex;gap:6px;flex-wrap:wrap"><span class="chip"><span class="dot"></span>${esc(areaName(l.area))}</span><span class="chip time">⏱ <span data-timer-spent="learn:${l.id}">${fmtDur(spentOn('learn', l.id))}</span></span></span><span class="pct">${learnProgress(l)}%</span></div>
       <div class="progress"><i style="width:${learnProgress(l)}%"></i></div>
       ${l.items?.length ? `<div class="items">${l.items.map(i => `<label class="${i.done ? 'done' : ''}"><input type="checkbox" data-item="${i.id}" ${i.done ? 'checked' : ''}>${esc(i.title)}</label>`).join('')}</div>` : ''}
       ${l.note ? `<p class="small muted" style="white-space:pre-wrap">${esc(l.note)}</p>` : ''}
@@ -789,7 +978,7 @@ function renderLearn(v) {
   $$('[data-ls]', v).forEach(b => b.onclick = () => { UI.learnStatus = b.dataset.ls; render(); });
   $$('.lcard', v).forEach(el => {
     const l = S.learning.find(x => x.id === el.dataset.id);
-    el.onclick = e => { if (e.target.closest('[data-item], label, [data-link]')) return; edit(l); };
+    el.onclick = e => { if (e.target.closest('[data-item], label, [data-link], [data-timer]')) return; edit(l); };
     $$('[data-item]', el).forEach(c => c.onchange = () => { const it = l.items.find(i => i.id === c.dataset.item); it.done = c.checked; if (l.items.every(i => i.done)) l.status = 'done'; else if (l.status === 'done') l.status = 'active'; else if (l.status === 'planned' && c.checked) l.status = 'active'; save(); render(); });
   });
 }
@@ -813,6 +1002,8 @@ function renderStats(v) {
       <div class="tile"><div class="lbl">Tasks completed</div><div class="val">${tasksDoneIn(keys)}</div>${delta(tasksDoneIn(keys), tasksDoneIn(prevKeys))}</div>
       <div class="tile"><div class="lbl">Streak</div><div class="val">${streak()}<small>days</small></div><div class="delta">days at ≥50% completion</div></div>
       <div class="tile"><div class="lbl">Active days</div><div class="val">${agg.days}</div><div class="delta">of ${keys.length} in range</div></div>
+      <div class="tile"><div class="lbl">Focus time</div><div class="val">${fmtDur(Math.round(focusMins(sessionsIn(keys))))}</div>${delta(Math.round(focusMins(sessionsIn(keys))), Math.round(focusMins(sessionsIn(prevKeys))), ' min')}</div>
+      <div class="tile"><div class="lbl">Break time</div><div class="val">${fmtDur(Math.round(breakMins(sessionsIn(keys))))}</div><div class="delta">${sessionsIn(keys).filter(x => x.mode === 'focus').length} focus sessions</div></div>
     </div>
     <div class="chart-grid">
       <div class="card span2"><div class="card-head"><h3>Completion trend · ${UI.range === 'day' ? 'last 14 days' : UI.range === 'week' ? 'last 12 weeks' : 'last 12 months'}</h3><button class="btn ghost sm" data-tbl="trend">Table</button></div><div id="chTrend"></div></div>
@@ -820,6 +1011,9 @@ function renderStats(v) {
       <div class="card"><div class="card-head"><h3>Completion by area · ${label.toLowerCase()}</h3><button class="btn ghost sm" data-tbl="areas">Table</button></div><div id="chAreas"></div></div>
       <div class="card span2"><div class="card-head"><h3>Consistency · last 20 weeks</h3></div><div id="chHeat"></div></div>
       <div class="card span2"><div class="card-head"><h3>Tasks completed · ${UI.range === 'day' ? 'per day' : UI.range === 'week' ? 'per week' : 'per month'}</h3><button class="btn ghost sm" data-tbl="tasks">Table</button></div><div id="chTasks"></div></div>
+      <div class="card"><div class="card-head"><h3>Focus time by task · ${label.toLowerCase()}</h3><button class="btn ghost sm" data-tbl="bytask">Table</button></div><div id="chByTask"></div></div>
+      <div class="card"><div class="card-head"><h3>Focus time by area · ${label.toLowerCase()}</h3><button class="btn ghost sm" data-tbl="focusarea">Table</button></div><div id="chFocusArea"></div></div>
+      <div class="card span2"><div class="card-head"><h3>Focus vs break · ${UI.range === 'day' ? 'per day' : UI.range === 'week' ? 'per week' : 'per month'}</h3><button class="btn ghost sm" data-tbl="focus">Table</button></div><div id="chFocus"></div></div>
     </div>`;
   $$('[data-r]', v).forEach(b => b.onclick = () => { UI.range = b.dataset.r; render(); });
   $$('[data-tbl]', v).forEach(b => b.onclick = () => { UI.tables[b.dataset.tbl] = !UI.tables[b.dataset.tbl]; render(); });
@@ -834,6 +1028,20 @@ function renderStats(v) {
   heatmap($('#chHeat'));
   const tk = per.map(p => ({ label: p.label, full: p.full, value: tasksDoneIn(p.keys) }));
   vbarChart($('#chTasks'), tk, { table: UI.tables.tasks, cols: ['Period', 'Tasks'] });
+
+  // focus time by task / learning item
+  const fs = sessionsIn(keys).filter(x => x.mode === 'focus');
+  const byRef = {};
+  for (const x of fs) { const k = x.kind + ':' + (x.refId || ''); const r = byRef[k] || (byRef[k] = { label: x.title, area: x.area, mins: 0, kind: x.kind }); r.mins += x.mins; }
+  const refRows = Object.values(byRef).sort((a, b) => b.mins - a.mins).slice(0, 10);
+  const maxRef = Math.max(1, ...refRows.map(r => r.mins));
+  hbarChart($('#chByTask'), refRows.map(r => ({ label: r.label, color: r.area ? areaColor(r.area) : 'var(--accent)', value: Math.round(r.mins), max: maxRef, sub: r.kind === 'learn' ? 'learning' : r.kind === 'task' ? 'task' : 'free focus', fmt: x => fmtDur(x) })), { table: UI.tables.bytask, cols: ['Task', 'Focus', 'Kind'], rowsExtra: refRows.map(r => r.kind) });
+  const byArea = {};
+  for (const x of fs) { const a = x.area || '_'; byArea[a] = (byArea[a] || 0) + x.mins; }
+  const areaFocus = Object.entries(byArea).map(([a, m]) => ({ label: a === '_' ? 'No area' : areaName(a), color: a === '_' ? 'var(--accent)' : areaColor(a), value: Math.round(m), max: Math.max(1, ...Object.values(byArea)), fmt: x => fmtDur(x) })).sort((a, b) => b.value - a.value);
+  hbarChart($('#chFocusArea'), areaFocus, { table: UI.tables.focusarea, cols: ['Area', 'Focus', ''] });
+  const fp = per.map(p => { const ss = sessionsIn(p.keys); return { label: p.label, full: p.full, value: Math.round(focusMins(ss)), sub: `${fmtDur(Math.round(breakMins(ss)))} break` }; });
+  vbarChart($('#chFocus'), fp, { table: UI.tables.focus, cols: ['Period', 'Focus min'], tip: p => `${fmtDur(p.value)} focus · ${p.sub}` });
 }
 
 /* ---- chart helpers (hand-rolled SVG) ---- */
@@ -884,7 +1092,7 @@ function hbarChart(el, rows, { table, cols, rowsExtra = [] }) {
   el.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="height:${H}px">${body}</svg>${table ? dataTable(cols, rows.map((r, i) => [r.label, r.fmt(r.value), rowsExtra[i] || ''])) : ''}`;
   $$('.hit', el).forEach(h => { h.addEventListener('mousemove', e => { const r = rows[+h.dataset.i]; showTip(e, `<b>${esc(r.label)}</b><br>${r.fmt(r.value)}${r.sub ? ` · ${r.sub}` : ''}`); }); h.addEventListener('mouseleave', hideTip); });
 }
-function vbarChart(el, pts, { table, cols }) {
+function vbarChart(el, pts, { table, cols, tip }) {
   const W = el.clientWidth || 600, H = 200, m = { t: 14, r: 12, b: 28, l: 30 };
   const pw = W - m.l - m.r, ph = H - m.t - m.b, n = pts.length;
   const max = Math.max(1, ...pts.map(p => p.value)); const step = max <= 5 ? 1 : Math.ceil(max / 4);
@@ -893,7 +1101,7 @@ function vbarChart(el, pts, { table, cols }) {
   let grid = ''; for (let g = 0; g <= top; g += step) grid += `<line x1="${m.l}" x2="${W - m.r}" y1="${ys(g)}" y2="${ys(g)}"/><text x="${m.l - 6}" y="${ys(g) + 4}" text-anchor="end">${g}</text>`;
   const bars = pts.map((p, i) => { const x = m.l + i * bw + (bw - barW) / 2; return `<path class="bar" d="${roundedV(x, ys(p.value), barW, ph - (ys(p.value) - m.t), 4)}" fill="var(--c-blue)"/>${p.value ? `<text x="${x + barW / 2}" y="${ys(p.value) - 5}" text-anchor="middle">${p.value}</text>` : ''}<text x="${x + barW / 2}" y="${H - 8}" text-anchor="middle">${esc(p.label)}</text><rect class="hit" data-i="${i}" x="${m.l + i * bw}" y="${m.t}" width="${bw}" height="${ph}"/>`; }).join('');
   el.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="height:${H}px"><g class="grid">${grid}</g><line class="axis" x1="${m.l}" x2="${W - m.r}" y1="${ys(0)}" y2="${ys(0)}"/>${bars}</svg>${table ? dataTable(cols, pts.map(p => [p.full || p.label, p.value])) : ''}`;
-  $$('.hit', el).forEach(h => { h.addEventListener('mousemove', e => { const p = pts[+h.dataset.i]; showTip(e, `<b>${esc(p.full || p.label)}</b><br>${p.value} task${p.value === 1 ? '' : 's'} completed`); }); h.addEventListener('mouseleave', hideTip); });
+  $$('.hit', el).forEach(h => { h.addEventListener('mousemove', e => { const p = pts[+h.dataset.i]; showTip(e, `<b>${esc(p.full || p.label)}</b><br>${tip ? tip(p) : `${p.value} task${p.value === 1 ? '' : 's'} completed`}`); }); h.addEventListener('mouseleave', hideTip); });
 }
 function heatmap(el) {
   const weeks = 20; const start = addDays(startOfWeek(new Date()), -(weeks - 1) * 7);
@@ -925,6 +1133,10 @@ function renderSettings(v) {
           <div class="field"><label>Theme</label><select class="input" id="sTheme"><option value="dark" ${st.theme === 'dark' ? 'selected' : ''}>Dark</option><option value="light" ${st.theme === 'light' ? 'selected' : ''}>Light</option></select></div>
           <div class="field"><label>Auto-lock after (minutes, 0 = never)</label><input class="input" type="number" id="sLock" min="0" max="240" value="${st.autoLock}"></div>
         </div>
+        <div class="field-row">
+          <div class="field"><label>Focus block (minutes)</label><input class="input" type="number" id="sFocus" min="5" max="180" step="5" value="${st.focusMin}"></div>
+          <div class="field"><label>Break after each block (minutes)</label><input class="input" type="number" id="sBreak" min="1" max="60" value="${st.breakMin}"></div>
+        </div>
       </div>
       <div class="card">
         <div class="card-head"><h3>Security</h3></div>
@@ -948,13 +1160,13 @@ function renderSettings(v) {
         <p class="small muted">Your data lives only in this browser. Export a JSON backup to keep it safe or move it to another device. The export file is <b>not</b> encrypted.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="exportBtn">Export backup</button><button class="btn" id="importBtn">Import backup</button><input type="file" id="importFile" accept="application/json" hidden></div>
         <div class="card-head" style="margin-top:8px"><h3>Shortcuts</h3></div>
-        <p class="small muted"><span class="kbd">1</span>–<span class="kbd">6</span> switch sections · <span class="kbd">N</span> new block / task · <span class="kbd">T</span> theme · <span class="kbd">L</span> lock · <span class="kbd">←</span> <span class="kbd">→</span> change day</p>
+        <p class="small muted"><span class="kbd">1</span>–<span class="kbd">7</span> switch sections · <span class="kbd">Space</span> start / pause timer · <span class="kbd">N</span> new block / task · <span class="kbd">T</span> theme · <span class="kbd">L</span> lock · <span class="kbd">←</span> <span class="kbd">→</span> change day</p>
         <div class="card-head" style="margin-top:8px"><h3>Danger zone</h3></div>
         <div><button class="btn danger" id="wipeBtn">Erase everything</button></div>
       </div>
     </div>`;
-  const apply = () => { st.name = $('#sName').value.trim(); st.dayStart = +$('#sStart').value; st.dayEnd = Math.max(st.dayStart + 1, +$('#sEnd').value); st.theme = $('#sTheme').value; st.autoLock = +$('#sLock').value; document.documentElement.dataset.theme = st.theme; save(); resetIdle(); };
-  ['#sName', '#sStart', '#sEnd', '#sTheme', '#sLock'].forEach(s => $(s).addEventListener('change', apply));
+  const apply = () => { st.name = $('#sName').value.trim(); st.dayStart = +$('#sStart').value; st.dayEnd = Math.max(st.dayStart + 1, +$('#sEnd').value); st.theme = $('#sTheme').value; st.autoLock = +$('#sLock').value; st.focusMin = clamp(+$('#sFocus').value || 45, 5, 180); st.breakMin = clamp(+$('#sBreak').value || 5, 1, 60); document.documentElement.dataset.theme = st.theme; save(); resetIdle(); };
+  ['#sName', '#sStart', '#sEnd', '#sTheme', '#sLock', '#sFocus', '#sBreak'].forEach(s => $(s).addEventListener('change', apply));
   $('#pwForm').onsubmit = async e => {
     e.preventDefault();
     const old = $('#pwOld').value, nw = $('#pwNew').value, nw2 = $('#pwNew2').value;
@@ -987,7 +1199,7 @@ function resetIdle() {
 }
 async function lock() {
   if (!S) return;
-  await saveNow(); Vault.lock(); S = null; clearInterval(nowTimer);
+  await saveNow(); Vault.lock(); S = null; clearInterval(nowTimer); clearInterval(tickTimer); tickTimer = null; document.title = 'DayOS';
   $('#app').hidden = true; $('#view').innerHTML = ''; showLock();
 }
 function showLock() {
@@ -1024,11 +1236,13 @@ function showLock() {
   };
 }
 function migrate() {
-  S.settings = { name: '', theme: 'dark', dayStart: 6, dayEnd: 24, autoLock: 15, ...S.settings };
-  S.learning ||= []; S.activities ||= []; S.tasks ||= []; S.days ||= {}; S.routine ||= [];
+  S.settings = { name: '', theme: 'dark', dayStart: 6, dayEnd: 24, autoLock: 15, focusMin: 45, breakMin: 5, autoBreak: true, notify: true, ...S.settings };
+  S.learning ||= []; S.activities ||= []; S.tasks ||= []; S.days ||= {}; S.routine ||= []; S.sessions ||= []; S.timer ||= null;
 }
 function enter() {
   $('#lock').hidden = true; $('#app').hidden = false; UI.date = todayKey(); UI.view = 'today';
+  if (S.timer && !S.timer.pausedAt && Timer.remainingMs() <= 0) Timer.complete();
+  if (S.timer) startTick();
   render(); resetIdle();
 }
 
@@ -1044,7 +1258,8 @@ document.addEventListener('keydown', e => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName) || $('.modal-bg');
   if (typing) return;
   const k = e.key.toLowerCase();
-  if (k >= '1' && k <= '6') { UI.view = VIEWS[+k - 1].id; render(); }
+  if (k >= '1' && k <= '7') { UI.view = VIEWS[+k - 1].id; render(); }
+  else if (k === ' ') { e.preventDefault(); if (S.timer) { S.timer.pausedAt ? Timer.resume() : Timer.pause(); } else if (UI.view === 'timer') $('#tStart')?.click(); }
   else if (k === 'l') lock();
   else if (k === 't') $('#themeBtn').click();
   else if (k === 'n') { if (UI.view === 'today') $('#addBlock')?.click(); else if (UI.view === 'board') $('#addTask')?.click(); else if (UI.view === 'learn') $('#addLearn')?.click(); else if (UI.view === 'routine') $('#addRoutine')?.click(); }
