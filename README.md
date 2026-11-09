@@ -25,7 +25,7 @@ The Web Crypto API needs a secure context (https, localhost or a local file), wh
 
 ## Shortcuts
 
-`1`–`7` switch sections · `Space` start / pause timer · `N` new block / task · `T` theme · `L` lock · `←` `→` change day
+`1`–`7` switch sections · `Space` start / pause timer · `R` restart timer · `N` new block / task · `T` theme · `L` lock · `←` `→` change day
 
 ## Files
 

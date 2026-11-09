@@ -283,6 +283,14 @@ const Timer = {
   pause() { const t = S.timer; if (!t || t.pausedAt) return; t.elapsedBefore += Date.now() - t.startedAt; t.pausedAt = Date.now(); save(); render(); },
   resume() { const t = S.timer; if (!t || !t.pausedAt) return; t.startedAt = Date.now(); t.pausedAt = null; save(); render(); startTick(); },
   extend(min) { const t = S.timer; if (!t) return; t.minutes += min; save(); render(); },
+  // Lost the thread? Put the clock back to the full length for the same task. Partial time is discarded, not logged.
+  restart() {
+    const t = S.timer; if (!t) return;
+    const ref = refOf(t.kind, t.id);
+    t.minutes = t.mode === 'focus' ? ((ref && ref.estimate) || S.settings.focusMin) : S.settings.breakMin;
+    t.elapsedBefore = 0; t.startedAt = Date.now(); t.beganAt = Date.now(); t.pausedAt = null;
+    save(); render(); startTick(); toast(`Restarted · ${fmtClock(t.minutes * 60000)}`);
+  },
   // Stop the current timer and log what was actually spent.
   stop({ silent = false } = {}) {
     const t = S.timer; if (!t) return;
@@ -482,8 +490,9 @@ function renderNav() {
   if (t) {
     $('#sideStat').innerHTML = `<div class="lbl">${t.mode === 'focus' ? '● Focus' : '○ Break'}${t.pausedAt ? ' · paused' : ''}</div><div class="val" data-timer-display>${fmtClock(Timer.remainingMs(t))}</div>
       <div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.title)}</div>
-      <div class="side-foot" style="margin-top:10px"><button class="btn sm" id="sideToggle">${t.pausedAt ? 'Start' : 'Pause'}</button><button class="btn sm" id="sideStop">Stop</button></div>`;
+      <div class="side-foot" style="margin-top:10px"><button class="btn sm" id="sideToggle">${t.pausedAt ? 'Start' : 'Pause'}</button><button class="btn sm" id="sideRestart" title="Restart from the full length">↺</button><button class="btn sm" id="sideStop">Stop</button></div>`;
     $('#sideToggle').onclick = () => t.pausedAt ? Timer.resume() : Timer.pause();
+    $('#sideRestart').onclick = () => Timer.restart();
     $('#sideStop').onclick = () => { Timer.stop(); toast('Session logged'); };
   } else {
     const f = focusMins(sessionsIn([todayKey()]));
@@ -867,7 +876,7 @@ function renderTimer(v) {
         <div class="timer-controls">
           ${!t ? `<button class="btn primary" id="tStart">${ICONS.play} Start focus</button><button class="btn" id="tBreak">Start a break</button>`
             : t.pausedAt ? `<button class="btn primary" id="tResume">${ICONS.play} ${t.elapsedBefore ? 'Resume' : 'Start ' + t.mode}</button>` : `<button class="btn" id="tPause">${ICONS.pause} Pause</button>`}
-          ${t ? `<button class="btn" id="tStop">■ Stop & log</button><button class="btn" id="tSkip">${t.mode === 'focus' ? 'Finish early → break' : 'Skip break'}</button><button class="btn ghost" id="tPlus">+5 min</button>` : ''}
+          ${t ? `<button class="btn" id="tRestart" title="Back to the full length, discard this attempt">↺ Restart</button><button class="btn" id="tStop">■ Stop & log</button><button class="btn" id="tSkip">${t.mode === 'focus' ? 'Finish early → break' : 'Skip break'}</button><button class="btn ghost" id="tPlus">+5 min</button>` : ''}
         </div>
         <div class="field" style="margin-top:16px"><label>Working on</label><select class="input" id="tRef">${options}</select></div>
         <label class="check" style="margin-top:12px"><input type="checkbox" id="tAuto" ${st.autoBreak ? 'checked' : ''}> Start the ${st.breakMin}-minute break automatically when a focus block ends</label>
@@ -897,6 +906,7 @@ function renderTimer(v) {
   $('#tResume')?.addEventListener('click', () => Timer.resume());
   $('#tPause')?.addEventListener('click', () => Timer.pause());
   $('#tStop')?.addEventListener('click', () => { Timer.stop(); toast('Session logged'); });
+  $('#tRestart')?.addEventListener('click', () => Timer.restart());
   $('#tSkip')?.addEventListener('click', () => Timer.skip());
   $('#tPlus')?.addEventListener('click', () => Timer.extend(5));
   $('#tAuto').onchange = e => { st.autoBreak = e.target.checked; save(); };
@@ -1160,7 +1170,7 @@ function renderSettings(v) {
         <p class="small muted">Your data lives only in this browser. Export a JSON backup to keep it safe or move it to another device. The export file is <b>not</b> encrypted.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="exportBtn">Export backup</button><button class="btn" id="importBtn">Import backup</button><input type="file" id="importFile" accept="application/json" hidden></div>
         <div class="card-head" style="margin-top:8px"><h3>Shortcuts</h3></div>
-        <p class="small muted"><span class="kbd">1</span>–<span class="kbd">7</span> switch sections · <span class="kbd">Space</span> start / pause timer · <span class="kbd">N</span> new block / task · <span class="kbd">T</span> theme · <span class="kbd">L</span> lock · <span class="kbd">←</span> <span class="kbd">→</span> change day</p>
+        <p class="small muted"><span class="kbd">1</span>–<span class="kbd">7</span> switch sections · <span class="kbd">Space</span> start / pause timer · <span class="kbd">R</span> restart timer · <span class="kbd">N</span> new block / task · <span class="kbd">T</span> theme · <span class="kbd">L</span> lock · <span class="kbd">←</span> <span class="kbd">→</span> change day</p>
         <div class="card-head" style="margin-top:8px"><h3>Danger zone</h3></div>
         <div><button class="btn danger" id="wipeBtn">Erase everything</button></div>
       </div>
@@ -1259,6 +1269,7 @@ document.addEventListener('keydown', e => {
   if (typing) return;
   const k = e.key.toLowerCase();
   if (k >= '1' && k <= '7') { UI.view = VIEWS[+k - 1].id; render(); }
+  else if (k === 'r' && S.timer) Timer.restart();
   else if (k === ' ') { e.preventDefault(); if (S.timer) { S.timer.pausedAt ? Timer.resume() : Timer.pause(); } else if (UI.view === 'timer') $('#tStart')?.click(); }
   else if (k === 'l') lock();
   else if (k === 't') $('#themeBtn').click();
